@@ -95,10 +95,12 @@ npx tsx scripts/import-onet.ts
 
 ## Phase 2: AI Exposure Scoring Engine (Week 2-3)
 
+### Status: IN PROGRESS
+
 ### What Claude Builds:
-- [ ] DWA scoring script (`app/scripts/score-dwas.ts`)
-- [ ] Exposure calculator (`app/src/lib/exposure-calculator.ts`)
-- [ ] GWA aggregation logic
+- [x] DWA scoring script (`app/scripts/score-dwas.ts`)
+- [x] Exposure calculator (`app/src/lib/exposure-calculator.ts`)
+- [x] GWA aggregation logic (`app/scripts/aggregate-gwa-scores.ts`)
 
 ### What You Do:
 
