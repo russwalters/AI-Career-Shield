@@ -1,21 +1,15 @@
-# Project: AI Career Shield
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project: AI Career Shield
+
+This is a new project. Update this file as the codebase develops.
 
 ## Commands
-- [Add your build/test/run commands here]
 
-## Code Style
-- [Add your conventions here]
+*To be added when build tooling is set up.*
 
-## Key Directories
-- [Document your project structure here]
+## Architecture
 
-## Notes
-- [Add important context here]
-
-## Verification
-After making changes, always verify by:
-1. Run tests - all tests must pass
-2. Run linting - no errors allowed
-3. Build must compile cleanly
-
-Do not consider a task complete until verification passes.
+*To be documented as the project structure emerges.*
