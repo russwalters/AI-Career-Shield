@@ -38,9 +38,18 @@ export default clerkMiddleware(async (auth, req) => {
   // Require authentication for all other routes
   if (!userId) {
     const signInUrl = new URL('/sign-in', req.url);
-    signInUrl.searchParams.set('redirect_url', req.url);
+    // For /assess, redirect through /onboarding first
+    if (req.nextUrl.pathname.startsWith('/assess')) {
+      signInUrl.searchParams.set('redirect_url', new URL('/onboarding', req.url).toString());
+    } else {
+      signInUrl.searchParams.set('redirect_url', req.url);
+    }
     return NextResponse.redirect(signInUrl);
   }
+
+  // For authenticated users accessing /assess, check if they've completed onboarding
+  // by checking sessionStorage on client-side (handled in assess page itself)
+  // Here we just ensure /onboarding is accessible
 
   // Check Shield tier for protected routes
   // TODO: For production, configure Clerk session claims to include subscription_tier
