@@ -126,13 +126,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Check subscription tier
-    if (context.userProfile.subscriptionTier !== 'shield') {
-      return NextResponse.json(
-        { error: 'Shield subscription required for coaching' },
-        { status: 403 }
-      );
-    }
+    // Check subscription tier - bypassed for testing, all users get Shield access
+    // TODO: Re-enable when Stripe integration is complete
+    // if (context.userProfile.subscriptionTier !== 'shield') {
+    //   return NextResponse.json(
+    //     { error: 'Shield subscription required for coaching' },
+    //     { status: 403 }
+    //   );
+    // }
 
     // If ending session, process insights and return
     if (endSession && conversationId) {

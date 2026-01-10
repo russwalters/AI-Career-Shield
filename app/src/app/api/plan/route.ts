@@ -83,13 +83,14 @@ export async function POST(req: NextRequest) {
       user = newUser;
     }
 
-    // Check subscription
-    if (user.subscription_tier !== 'shield') {
-      return NextResponse.json(
-        { error: 'Shield subscription required' },
-        { status: 403 }
-      );
-    }
+    // Check subscription - bypassed for testing, all users get Shield access
+    // TODO: Re-enable when Stripe integration is complete
+    // if (user.subscription_tier !== 'shield') {
+    //   return NextResponse.json(
+    //     { error: 'Shield subscription required' },
+    //     { status: 403 }
+    //   );
+    // }
 
     // Get latest assessment
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
