@@ -98,11 +98,40 @@ export async function POST(req: NextRequest) {
     console.log('Extracting assessment data...');
     const extracted = await extractAssessmentData(messages);
 
-    if (!extracted || !extracted.job_title) {
+    if (!extracted) {
       return NextResponse.json(
         { error: 'Could not extract assessment data from conversation' },
         { status: 400 }
       );
+    }
+
+    // Check for onboarding profile data to supplement extraction
+    const supabase = getSupabaseAdmin();
+    let onboardingJobTitle: string | null = null;
+
+    if (clerkUserId) {
+      const { data: userData } = await supabase
+        .from('users')
+        .select('job_title')
+        .eq('clerk_id', clerkUserId)
+        .single() as { data: { job_title: string | null } | null };
+
+      if (userData?.job_title) {
+        onboardingJobTitle = userData.job_title;
+      }
+    }
+
+    // Use onboarding job title if extraction failed or returned a generic title
+    const genericTitles = ['unknown', 'not specified', 'employee', 'worker', 'professional'];
+    if (!extracted.job_title || genericTitles.includes(extracted.job_title.toLowerCase())) {
+      if (onboardingJobTitle) {
+        extracted.job_title = onboardingJobTitle;
+      } else {
+        return NextResponse.json(
+          { error: 'Could not determine job title from conversation' },
+          { status: 400 }
+        );
+      }
     }
 
     // Step 2: Match job title to O*NET occupation
@@ -148,7 +177,6 @@ export async function POST(req: NextRequest) {
 
     // Step 6: Save to database (if user is authenticated)
     let assessmentId: string | null = null;
-    const supabase = getSupabaseAdmin();
 
     if (clerkUserId) {
       // Get or create user in our database

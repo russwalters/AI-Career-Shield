@@ -68,6 +68,11 @@ export interface Database {
           subscription_tier: 'free' | 'shield';
           subscription_status: 'active' | 'canceled' | 'past_due';
           stripe_customer_id: string | null;
+          // Onboarding fields
+          job_title: string | null;
+          years_of_experience: number | null;
+          current_salary: number | null;
+          onboarding_completed_at: string | null;
         };
         Insert: Omit<Database['public']['Tables']['users']['Row'], 'id' | 'created_at' | 'updated_at'>;
         Update: Partial<Database['public']['Tables']['users']['Row']>;

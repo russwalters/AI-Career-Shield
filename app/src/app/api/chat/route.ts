@@ -13,6 +13,10 @@ interface ChatRequest {
       targetCareer?: string;
       riskScore?: number;
       currentMilestone?: number;
+      // Onboarding profile fields (for assessment mode)
+      jobTitle?: string;
+      yearsOfExperience?: number;
+      currentSalary?: number;
     };
     memories?: string[];
   };
@@ -62,6 +66,26 @@ export async function POST(req: NextRequest) {
         context.memories.forEach((memory, i) => {
           systemPrompt += `${i + 1}. ${memory}\n`;
         });
+      }
+    }
+
+    // Add profile context for assessment mode (from onboarding)
+    if (mode === 'assessment' && context?.userProfile) {
+      const { jobTitle, yearsOfExperience, currentSalary } = context.userProfile;
+
+      if (jobTitle || yearsOfExperience || currentSalary) {
+        systemPrompt += '\n\n## Pre-Collected User Information\n\n';
+        systemPrompt += 'The user has already provided some information during onboarding. DO NOT ask about these details again—acknowledge them briefly and move on to deeper questions about their specific tasks.\n\n';
+
+        if (jobTitle) systemPrompt += `- Job Title: ${jobTitle}\n`;
+        if (yearsOfExperience) systemPrompt += `- Years of Experience: ${yearsOfExperience}\n`;
+        if (currentSalary) systemPrompt += `- Annual Salary: $${currentSalary.toLocaleString()}\n`;
+
+        systemPrompt += '\nFocus your questions on:\n';
+        systemPrompt += '- Specific day-to-day tasks and responsibilities\n';
+        systemPrompt += '- Tools and technologies used\n';
+        systemPrompt += '- Collaboration patterns and team dynamics\n';
+        systemPrompt += '- What brought them to AI Career Shield today\n';
       }
     }
 

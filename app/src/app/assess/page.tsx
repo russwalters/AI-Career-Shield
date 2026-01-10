@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ChatInterface } from "@/components/chat/ChatInterface";
@@ -9,27 +9,70 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Shield, ArrowLeft, X } from "lucide-react";
 
-const INITIAL_GREETING = `Hey there! I'm Sage, and I'm here to help you understand how AI might affect your career—and more importantly, what you can do about it.
+// Profile data from onboarding
+interface OnboardingProfile {
+  jobTitle: string | null;
+  yearsOfExperience: number | null;
+  currentSalary: number | null;
+}
+
+// Generate personalized greeting based on profile
+function getInitialGreeting(profile: OnboardingProfile | null): string {
+  if (profile?.jobTitle) {
+    const experienceText = profile.yearsOfExperience
+      ? ` with ${profile.yearsOfExperience} year${profile.yearsOfExperience === 1 ? '' : 's'} of experience`
+      : '';
+
+    return `Hey there! I'm Sage. I see you're a ${profile.jobTitle}${experienceText}—that's great context to start with!
+
+Let's skip the basics and dig into the interesting stuff. What does a typical week actually look like for you? I'm curious about the specific tasks that take up most of your time.`;
+  }
+
+  return `Hey there! I'm Sage, and I'm here to help you understand how AI might affect your career—and more importantly, what you can do about it.
 
 Let's start with the basics. What's your current job title, and what kind of company do you work for? (Size, industry, that sort of thing.)`;
+}
 
 // Minimum exchanges before allowing assessment completion
 const MIN_EXCHANGES = 4;
 
 export default function AssessPage() {
   const router = useRouter();
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "initial",
-      role: "assistant",
-      content: INITIAL_GREETING,
-      timestamp: new Date(),
-    },
-  ]);
+  const [profile, setProfile] = useState<OnboardingProfile | null>(null);
+  const [messagesInitialized, setMessagesInitialized] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Load profile from sessionStorage on mount and initialize greeting
+  useEffect(() => {
+    if (messagesInitialized) return;
+
+    let loadedProfile: OnboardingProfile | null = null;
+
+    try {
+      const storedProfile = sessionStorage.getItem("onboardingProfile");
+      if (storedProfile) {
+        loadedProfile = JSON.parse(storedProfile);
+        setProfile(loadedProfile);
+      }
+    } catch {
+      // Ignore parse errors
+    }
+
+    // Initialize messages with personalized greeting
+    setMessages([
+      {
+        id: "initial",
+        role: "assistant",
+        content: getInitialGreeting(loadedProfile),
+        timestamp: new Date(),
+      },
+    ]);
+    setMessagesInitialized(true);
+  }, [messagesInitialized]);
 
   // Count user messages to track progress
   const userMessageCount = messages.filter((m) => m.role === "user").length;
@@ -52,6 +95,13 @@ export default function AssessPage() {
             content: m.content,
           })),
           mode: "assessment",
+          context: profile ? {
+            userProfile: {
+              jobTitle: profile.jobTitle || undefined,
+              yearsOfExperience: profile.yearsOfExperience || undefined,
+              currentSalary: profile.currentSalary || undefined,
+            },
+          } : undefined,
         }),
         signal: abortControllerRef.current.signal,
       });
@@ -126,7 +176,7 @@ export default function AssessPage() {
 
       return fullResponse;
     },
-    []
+    [profile]
   );
 
   /**

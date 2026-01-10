@@ -7,11 +7,12 @@ const isPublicRoute = createRouteMatcher([
   '/',
   '/sign-in(.*)',
   '/sign-up(.*)',
-  '/assess(.*)', // Assessment is available to everyone
+  // Note: /assess now requires auth - users must sign up first
   '/results(.*)', // Results page (shows upgrade prompt for full features)
   '/paths(.*)', // Career paths page
   '/api/chat(.*)', // Chat API for assessment
   '/api/assessment(.*)', // Assessment processing API
+  '/api/onboarding(.*)', // Onboarding API (auth checked internally)
   '/api/plan(.*)', // Plan API (auth checked internally)
   '/api/coach(.*)', // Coach API (auth checked internally)
   '/api/checkout(.*)', // Checkout API (auth checked internally, returns JSON)
