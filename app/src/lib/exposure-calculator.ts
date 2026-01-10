@@ -89,6 +89,13 @@ function categorizeScore(score: number): 'low' | 'medium' | 'high' {
 export async function getDWAExposures(dwaIds: string[]): Promise<Map<string, DWAExposure>> {
   const supabase = getSupabaseAdmin();
 
+  interface DWAExposureRow {
+    dwa_id: string;
+    exposure_score: number;
+    confidence: number | null;
+    rationale: string | null;
+  }
+
   const { data, error } = await supabase
     .from('dwa_ai_exposure')
     .select(`
@@ -97,7 +104,7 @@ export async function getDWAExposures(dwaIds: string[]): Promise<Map<string, DWA
       confidence,
       rationale
     `)
-    .in('dwa_id', dwaIds);
+    .in('dwa_id', dwaIds) as unknown as { data: DWAExposureRow[] | null; error: Error | null };
 
   if (error) {
     console.error('Failed to fetch DWA exposures:', error);
@@ -108,9 +115,11 @@ export async function getDWAExposures(dwaIds: string[]): Promise<Map<string, DWA
   const { data: dwaData } = await supabase
     .from('detailed_work_activities')
     .select('dwa_id, dwa_title')
-    .in('dwa_id', dwaIds);
+    .in('dwa_id', dwaIds) as unknown as { data: Array<{ dwa_id: string; dwa_title: string }> | null };
 
-  const titleMap = new Map(dwaData?.map(d => [d.dwa_id, d.dwa_title]) || []);
+  const titleMap = new Map<string, string>(
+    (dwaData || []).map(d => [d.dwa_id, d.dwa_title])
+  );
 
   const result = new Map<string, DWAExposure>();
   for (const row of data || []) {
@@ -430,10 +439,18 @@ export async function calculateExposure(
 export async function getOccupationExposure(socCode: string): Promise<ExposureScore | null> {
   const supabase = getSupabaseAdmin();
 
+  interface OccupationRiskResult {
+    risk_score: number;
+    high_exposure_pct: number;
+    medium_exposure_pct: number;
+    low_exposure_pct: number;
+  }
+
   // Use the database function to calculate occupation risk
-  const { data, error } = await supabase.rpc('calculate_occupation_risk', {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase.rpc as any)('calculate_occupation_risk', {
     p_soc_code: socCode,
-  });
+  }) as { data: OccupationRiskResult[] | null; error: Error | null };
 
   if (error || !data || data.length === 0) {
     console.error('Failed to calculate occupation risk:', error);

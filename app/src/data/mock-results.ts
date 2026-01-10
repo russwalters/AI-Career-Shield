@@ -10,6 +10,7 @@ export interface TaskExposure {
 
 export interface CareerPath {
   id: string;
+  socCode?: string; // O*NET SOC code for real recommendations
   title: string;
   riskScore: number;
   skillsMatch: number;

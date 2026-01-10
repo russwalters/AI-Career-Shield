@@ -30,7 +30,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const client = getAnthropicClient();
+    // Get Claude client - handle missing API key gracefully
+    let client;
+    try {
+      client = getAnthropicClient();
+    } catch (err) {
+      console.error('Claude client error:', err);
+      return new Response(
+        JSON.stringify({ error: 'AI service not configured', details: err instanceof Error ? err.message : 'Unknown error' }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
 
     // Build system prompt based on mode
     let systemPrompt = mode === 'coaching' ? SAGE_COACHING_PROMPT : SAGE_ASSESSMENT_PROMPT;
@@ -62,13 +72,38 @@ export async function POST(req: NextRequest) {
     }));
 
     // Create streaming response
-    const stream = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages: anthropicMessages,
-      stream: true,
-    });
+    let stream;
+    try {
+      stream = await client.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: anthropicMessages,
+        stream: true,
+      });
+    } catch (err) {
+      console.error('Claude API error:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+
+      // Check for common API errors
+      if (errorMessage.includes('401') || errorMessage.includes('authentication')) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid API key', details: 'Check your ANTHROPIC_API_KEY' }),
+          { status: 401, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (errorMessage.includes('429') || errorMessage.includes('rate')) {
+        return new Response(
+          JSON.stringify({ error: 'Rate limited', details: 'Too many requests, please wait' }),
+          { status: 429, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ error: 'AI service error', details: errorMessage }),
+        { status: 502, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
 
     // Create a readable stream for the response
     const encoder = new TextEncoder();
@@ -91,7 +126,11 @@ export async function POST(req: NextRequest) {
           controller.close();
         } catch (error) {
           console.error('Streaming error:', error);
-          controller.error(error);
+          // Send error through stream so client can handle it
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ error: 'Stream interrupted' })}\n\n`)
+          );
+          controller.close();
         }
       },
     });

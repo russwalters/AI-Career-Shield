@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import { Message } from "@/components/chat/MessageBubble";
@@ -18,103 +18,272 @@ import {
   Menu,
   ArrowLeft,
   MessageSquare,
-  Calendar,
   BookOpen,
   Target,
   Clock,
+  Loader2,
+  AlertCircle,
 } from "lucide-react";
 
-// Mock coach responses (in production, this would be Claude API with Sage personality)
-function generateCoachResponse(userMessage: string): string {
-  const lowerMessage = userMessage.toLowerCase();
+interface CoachingContext {
+  hasAssessment: boolean;
+  riskScore?: number;
+  conversationCount: number;
+  memoryCount: number;
+  goals: string[];
+}
 
-  if (lowerMessage.includes("progress") || lowerMessage.includes("update")) {
-    return `That's great that you want to check in on progress! Let's see where you're at.
-
-Looking at your plan, you've been working on the foundational skills for about a week now. How are you feeling about the Google Analytics certification you started? Any parts clicking particularly well, or anything feeling like a slog?`;
-  }
-
-  if (lowerMessage.includes("stuck") || lowerMessage.includes("help")) {
-    return `I hear you—feeling stuck is completely normal, especially when you're learning something new.
-
-Let's break this down: What specifically is giving you trouble? Is it the material itself, finding time to study, or something else? Sometimes just naming the blocker helps us figure out the way around it.`;
-  }
-
-  if (lowerMessage.includes("interview") || lowerMessage.includes("apply")) {
-    return `Thinking about interviews already—I like the proactive mindset!
-
-Based on where you are in your transition, here's what I'd suggest: Let's get your LinkedIn updated first to reflect your new direction. You don't need to wait until you have all the skills. Companies hiring for this role often value the marketing background you bring.
-
-Want me to walk you through how to position your experience for this role?`;
-  }
-
-  if (lowerMessage.includes("nervous") || lowerMessage.includes("worried") || lowerMessage.includes("scared")) {
-    return `Real talk: what you're feeling is completely normal. Career transitions are inherently uncertain, and that uncertainty triggers anxiety. That's just biology.
-
-But here's the thing—you're not starting from zero. You have years of relevant experience, transferable skills, and now a clear plan. The people who struggle are the ones who don't prepare. You're already ahead.
-
-What's the specific thing worrying you most right now? Let's tackle it directly.`;
-  }
-
-  // Default thoughtful response
-  return `That's an interesting point. Let me think about this in context of what you're working toward.
-
-Based on our previous conversations, you're transitioning toward a Product Marketing role with lower AI exposure. What you're describing sounds like a normal part of that journey.
-
-What would be most helpful right now—should we adjust your plan, talk through a specific challenge, or just brainstorm next steps?`;
+interface PlanData {
+  targetCareer: string;
+  progress: number;
+  createdAt?: string;
 }
 
 export default function CoachPage() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content: `Hey! Good to see you back.
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isTyping, setIsTyping] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [context, setContext] = useState<CoachingContext | null>(null);
+  const [plan, setPlan] = useState<PlanData | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-I've been thinking about your transition to Product Marketing Manager—you made some solid progress last week on the competitive analysis fundamentals.
+  // Load user context and generate initial greeting
+  useEffect(() => {
+    async function loadContext() {
+      try {
+        // Fetch coaching context
+        const contextRes = await fetch("/api/coach", { method: "GET" });
+        if (contextRes.ok) {
+          const data = await contextRes.json();
+          if (data.success) {
+            setContext(data.context);
+          }
+        }
+
+        // Fetch action plan if exists
+        const planRes = await fetch("/api/plan");
+        if (planRes.ok) {
+          const data = await planRes.json();
+          if (data.success && data.plan) {
+            setPlan({
+              targetCareer: data.plan.targetCareer,
+              progress: data.plan.progress,
+              createdAt: data.plan.createdAt,
+            });
+          }
+        }
+
+        // Generate personalized greeting
+        const greeting = generateGreeting();
+        setMessages([
+          {
+            id: "welcome",
+            role: "assistant",
+            content: greeting,
+            timestamp: new Date(),
+          },
+        ]);
+      } catch (err) {
+        console.error("Failed to load context:", err);
+        // Set default greeting anyway
+        setMessages([
+          {
+            id: "welcome",
+            role: "assistant",
+            content: `Hey there! I'm Sage, your AI career coach.
+
+I'm here to help you navigate your career transition, work through challenges, and keep you on track with your goals.
+
+What's on your mind today?`,
+            timestamp: new Date(),
+          },
+        ]);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    loadContext();
+  }, []);
+
+  function generateGreeting(): string {
+    if (plan) {
+      const weekNumber = plan.createdAt
+        ? Math.ceil(
+            (Date.now() - new Date(plan.createdAt).getTime()) /
+              (7 * 24 * 60 * 60 * 1000)
+          )
+        : 1;
+
+      return `Hey! Good to see you back.
+
+I've been tracking your progress toward ${plan.targetCareer}—you're ${plan.progress}% through your action plan (week ${weekNumber} of 12).
 
 What's on your mind today? We could:
 • Review your progress and adjust the plan
 • Work through a specific challenge
 • Talk about anything else that's coming up
 
-What would be most helpful?`,
-      timestamp: new Date(),
+What would be most helpful?`;
+    }
+
+    return `Hey there! I'm Sage, your AI career coach.
+
+I see you have Shield access—that means I can remember our conversations and help you build a personalized action plan.
+
+To get started, tell me: What's your biggest career concern right now? Or if you've already done an assessment, we can dive into your results and start building your plan.`;
+  }
+
+  /**
+   * Stream a coaching response from the API
+   */
+  const streamCoachResponse = useCallback(
+    async (allMessages: Message[]): Promise<string> => {
+      abortControllerRef.current = new AbortController();
+
+      const response = await fetch("/api/coach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: allMessages.map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+          conversationId,
+        }),
+        signal: abortControllerRef.current.signal,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to get coaching response");
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+
+      const decoder = new TextDecoder();
+      let fullResponse = "";
+      const currentMessageId = `assistant-${Date.now()}`;
+
+      // Add placeholder message for streaming
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: currentMessageId,
+          role: "assistant",
+          content: "",
+          timestamp: new Date(),
+        },
+      ]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+            if (data === "[DONE]") continue;
+
+            try {
+              const parsed = JSON.parse(data);
+
+              // Handle conversation ID from first message
+              if (parsed.conversationId && !conversationId) {
+                setConversationId(parsed.conversationId);
+              }
+
+              if (parsed.text) {
+                fullResponse += parsed.text;
+                // Update the message with streamed content
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === currentMessageId
+                      ? { ...m, content: fullResponse }
+                      : m
+                  )
+                );
+              }
+            } catch {
+              // Ignore parse errors for incomplete chunks
+            }
+          }
+        }
+      }
+
+      return fullResponse;
     },
-  ]);
-  const [isTyping, setIsTyping] = useState(false);
+    [conversationId]
+  );
 
-  const handleSendMessage = useCallback((content: string) => {
-    // Add user message
-    const userMessage: Message = {
-      id: `user-${Date.now()}`,
-      role: "user",
-      content,
-      timestamp: new Date(),
-    };
-    setMessages((prev) => [...prev, userMessage]);
+  const handleSendMessage = useCallback(
+    async (content: string) => {
+      if (isTyping) return;
 
-    // Simulate typing delay
-    setIsTyping(true);
+      setError(null);
 
-    setTimeout(() => {
-      const response = generateCoachResponse(content);
-      const assistantMessage: Message = {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        content: response,
+      // Add user message
+      const userMessage: Message = {
+        id: `user-${Date.now()}`,
+        role: "user",
+        content,
         timestamp: new Date(),
       };
-      setMessages((prev) => [...prev, assistantMessage]);
-      setIsTyping(false);
-    }, 1500);
-  }, []);
+
+      const updatedMessages = [...messages, userMessage];
+      setMessages(updatedMessages);
+      setIsTyping(true);
+
+      try {
+        await streamCoachResponse(updatedMessages);
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          return;
+        }
+        console.error("Coach error:", err);
+        setError(
+          err instanceof Error ? err.message : "Failed to get coaching response"
+        );
+        // Remove placeholder message on error
+        setMessages((prev) => prev.filter((m) => m.content !== ""));
+      } finally {
+        setIsTyping(false);
+      }
+    },
+    [messages, isTyping, streamCoachResponse]
+  );
 
   const quickActions = [
     { label: "Review my plan", icon: Target },
-    { label: "Update progress", icon: Calendar },
+    { label: "Update progress", icon: MessageSquare },
     { label: "Learning resources", icon: BookOpen },
   ];
+
+  // Calculate week number for display
+  const weekNumber = plan?.createdAt
+    ? Math.min(
+        12,
+        Math.ceil(
+          (Date.now() - new Date(plan.createdAt).getTime()) /
+            (7 * 24 * 60 * 60 * 1000)
+        )
+      )
+    : 1;
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col h-screen bg-slate-50 items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600 mb-4" />
+        <p className="text-slate-600">Loading your coaching session...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen bg-slate-50">
@@ -196,17 +365,32 @@ What would be most helpful?`,
       </header>
 
       {/* Context Banner */}
-      <div className="bg-blue-50 border-b border-blue-100 px-4 py-2">
-        <div className="max-w-4xl mx-auto flex items-center justify-between text-sm">
-          <div className="flex items-center gap-2 text-blue-700">
-            <Clock className="h-4 w-4" />
-            <span>
-              Goal: <strong>Product Marketing Manager</strong> • Week 3 of 12
+      {plan && (
+        <div className="bg-blue-50 border-b border-blue-100 px-4 py-2">
+          <div className="max-w-4xl mx-auto flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2 text-blue-700">
+              <Clock className="h-4 w-4" />
+              <span>
+                Goal: <strong>{plan.targetCareer}</strong> • Week {weekNumber}{" "}
+                of 12
+              </span>
+            </div>
+            <span className="text-blue-600 font-medium">
+              {plan.progress}% Complete
             </span>
           </div>
-          <span className="text-blue-600 font-medium">25% Complete</span>
         </div>
-      </div>
+      )}
+
+      {/* Error Banner */}
+      {error && (
+        <div className="bg-red-50 border-b border-red-200 px-4 py-2">
+          <div className="max-w-4xl mx-auto flex items-center gap-2 text-sm text-red-700">
+            <AlertCircle className="h-4 w-4" />
+            <span>{error}</span>
+          </div>
+        </div>
+      )}
 
       {/* Quick Actions (Mobile) */}
       <div className="md:hidden bg-white border-b border-slate-200 px-4 py-3">
@@ -218,6 +402,7 @@ What would be most helpful?`,
               size="sm"
               className="flex-shrink-0"
               onClick={() => handleSendMessage(action.label)}
+              disabled={isTyping}
             >
               <action.icon className="h-4 w-4 mr-2" />
               {action.label}
@@ -233,6 +418,7 @@ What would be most helpful?`,
           onSendMessage={handleSendMessage}
           isTyping={isTyping}
           placeholder="Ask me anything about your career transition..."
+          disabled={isTyping}
         />
       </div>
     </div>

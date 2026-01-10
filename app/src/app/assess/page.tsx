@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ChatInterface } from "@/components/chat/ChatInterface";
@@ -8,35 +8,13 @@ import { Message } from "@/components/chat/MessageBubble";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Shield, ArrowLeft, X } from "lucide-react";
-import { assessmentFlow } from "@/data/mock-assessment";
 
-// Mock response generator (simulates Sage's responses)
-function generateMockResponse(step: number, userMessage: string): string {
-  // In production, this would call Claude API
-  const responses: Record<number, string> = {
-    0: `Got it—sounds like you're a ${userMessage.split(" ")[0]} type role. That covers a lot of ground though.
+const INITIAL_GREETING = `Hey there! I'm Sage, and I'm here to help you understand how AI might affect your career—and more importantly, what you can do about it.
 
-Walk me through what a typical week actually looks like for you. What are the main things you spend your time on? Don't worry about being comprehensive—just the big buckets of work.`,
+Let's start with the basics. What's your current job title, and what kind of company do you work for? (Size, industry, that sort of thing.)`;
 
-    1: `That's helpful. I'm starting to get a picture here.
-
-Now, what tools and technologies are you working with day-to-day? Think software, platforms, anything you regularly use to get your work done.`,
-
-    2: `Interesting mix. One more angle I want to understand: how much of your work involves other people?
-
-I mean things like—managing a team, collaborating with stakeholders, client relationships, mentoring. Give me a sense of how much of your week is "heads down solo work" vs. "working with people."`,
-
-    3: `This is really helpful context. I'm seeing some patterns already.
-
-Last question before I put together your analysis: What brought you here today? Are you seeing AI show up in your work already, or is this more about getting ahead of things? Any specific concerns on your mind?`,
-
-    4: `Perfect. Give me a moment to analyze everything you've shared against our database of occupations and AI exposure research.
-
-I'm looking at task-level vulnerability, your skill composition, and where the trends are heading...`,
-  };
-
-  return responses[step] || assessmentFlow[step]?.prompt || "";
-}
+// Minimum exchanges before allowing assessment completion
+const MIN_EXCHANGES = 4;
 
 export default function AssessPage() {
   const router = useRouter();
@@ -44,18 +22,205 @@ export default function AssessPage() {
     {
       id: "initial",
       role: "assistant",
-      content: assessmentFlow[0].prompt,
+      content: INITIAL_GREETING,
       timestamp: new Date(),
     },
   ]);
   const [isTyping, setIsTyping] = useState(false);
-  const [currentStep, setCurrentStep] = useState(0);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Count user messages to track progress
+  const userMessageCount = messages.filter((m) => m.role === "user").length;
   const totalSteps = 5;
-  const progress = Math.min(((currentStep + 1) / totalSteps) * 100, 100);
+  const progress = Math.min(((userMessageCount + 1) / totalSteps) * 100, 100);
 
+  /**
+   * Stream a response from Claude via the chat API
+   */
+  const streamChatResponse = useCallback(
+    async (allMessages: Message[]): Promise<string> => {
+      abortControllerRef.current = new AbortController();
+
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: allMessages.map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+          mode: "assessment",
+        }),
+        signal: abortControllerRef.current.signal,
+      });
+
+      if (!response.ok) {
+        // Try to parse error message from response
+        const contentType = response.headers.get('content-type');
+        if (contentType?.includes('application/json')) {
+          const errorData = await response.json();
+          throw new Error(errorData.details || errorData.error || "Failed to get response from AI");
+        }
+        throw new Error(`AI service error (${response.status})`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+
+      const decoder = new TextDecoder();
+      let fullResponse = "";
+      const currentMessageId = `assistant-${Date.now()}`;
+
+      // Add placeholder message for streaming
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: currentMessageId,
+          role: "assistant",
+          content: "",
+          timestamp: new Date(),
+        },
+      ]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+            if (data === "[DONE]") continue;
+
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.error) {
+                // Error sent through stream
+                throw new Error(parsed.error);
+              }
+              if (parsed.text) {
+                fullResponse += parsed.text;
+                // Update the message with streamed content
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === currentMessageId
+                      ? { ...m, content: fullResponse }
+                      : m
+                  )
+                );
+              }
+            } catch (parseErr) {
+              // Only throw if it's an actual error, not a JSON parse error
+              if (parseErr instanceof Error && parseErr.message !== 'Unexpected token') {
+                throw parseErr;
+              }
+              // Ignore JSON parse errors for incomplete chunks
+            }
+          }
+        }
+      }
+
+      return fullResponse;
+    },
+    []
+  );
+
+  /**
+   * Process the completed assessment
+   */
+  const processAssessment = useCallback(
+    async (allMessages: Message[]) => {
+      setIsProcessing(true);
+
+      try {
+        const response = await fetch("/api/assessment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: allMessages.map((m) => ({
+              role: m.role,
+              content: m.content,
+            })),
+          }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || "Failed to process assessment");
+        }
+
+        const result = await response.json();
+
+        // Store assessment result in sessionStorage for results page
+        sessionStorage.setItem(
+          "assessmentResult",
+          JSON.stringify({
+            assessmentId: result.assessmentId,
+            assessment: result.assessment,
+            exposure: result.exposure,
+          })
+        );
+
+        // Navigate to results
+        router.push(
+          result.assessmentId
+            ? `/results?id=${result.assessmentId}`
+            : "/results"
+        );
+      } catch (err) {
+        console.error("Assessment processing error:", err);
+        setError(
+          err instanceof Error ? err.message : "Failed to process assessment"
+        );
+        setIsProcessing(false);
+      }
+    },
+    [router]
+  );
+
+  /**
+   * Check if the response indicates assessment is complete
+   */
+  const isAssessmentComplete = (response: string): boolean => {
+    const completionPhrases = [
+      "analyze everything",
+      "put together your analysis",
+      "generate your",
+      "looking at task-level",
+      "moment to analyze",
+      "processing your",
+      "calculating your",
+      "let me show you",
+      "calculate your ai exposure",
+      "ai exposure score",
+      "exposure score",
+      "give me a moment",
+      "one moment while",
+      "let me process",
+      "running the analysis",
+      "crunching the numbers",
+      "analyzing your role",
+      "analyzing your career",
+      "pulling together",
+      "putting together your results",
+    ];
+    const lowerResponse = response.toLowerCase();
+    return completionPhrases.some((phrase) => lowerResponse.includes(phrase));
+  };
+
+  /**
+   * Handle sending a message
+   */
   const handleSendMessage = useCallback(
-    (content: string) => {
+    async (content: string) => {
+      if (isTyping || isProcessing) return;
+
+      setError(null);
+
       // Add user message
       const userMessage: Message = {
         id: `user-${Date.now()}`,
@@ -63,49 +228,49 @@ export default function AssessPage() {
         content,
         timestamp: new Date(),
       };
-      setMessages((prev) => [...prev, userMessage]);
 
-      // Simulate typing delay
+      const updatedMessages = [...messages, userMessage];
+      setMessages(updatedMessages);
       setIsTyping(true);
 
-      setTimeout(() => {
-        const nextStep = currentStep + 1;
+      try {
+        // Stream response from Claude
+        const response = await streamChatResponse(updatedMessages);
 
-        if (nextStep >= totalSteps) {
-          // Assessment complete - navigate to results
-          setIsTyping(false);
-
-          // Add final processing message
-          const processingMessage: Message = {
-            id: `assistant-processing`,
-            role: "assistant",
-            content: `Perfect. I've got everything I need.
-
-Based on what you've shared, I'm seeing some clear patterns. Let me show you your full analysis...`,
-            timestamp: new Date(),
-          };
-          setMessages((prev) => [...prev, processingMessage]);
-
-          // Navigate to results after a brief delay
+        // Check if we have enough exchanges and Claude signals completion
+        const newUserCount = userMessageCount + 1;
+        if (newUserCount >= MIN_EXCHANGES && isAssessmentComplete(response)) {
+          // Wait a moment, then process the assessment
           setTimeout(() => {
-            router.push("/results");
+            setMessages((prev) => {
+              processAssessment(prev);
+              return prev;
+            });
           }, 2000);
-        } else {
-          // Generate next response
-          const response = generateMockResponse(nextStep, content);
-          const assistantMessage: Message = {
-            id: `assistant-${Date.now()}`,
-            role: "assistant",
-            content: response,
-            timestamp: new Date(),
-          };
-          setMessages((prev) => [...prev, assistantMessage]);
-          setCurrentStep(nextStep);
-          setIsTyping(false);
         }
-      }, 1500);
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          // Request was cancelled, ignore
+          return;
+        }
+        console.error("Chat error:", err);
+        setError(
+          err instanceof Error ? err.message : "Failed to get AI response"
+        );
+        // Remove the placeholder message on error
+        setMessages((prev) => prev.filter((m) => m.content !== ""));
+      } finally {
+        setIsTyping(false);
+      }
     },
-    [currentStep, router]
+    [
+      messages,
+      isTyping,
+      isProcessing,
+      userMessageCount,
+      streamChatResponse,
+      processAssessment,
+    ]
   );
 
   return (
@@ -139,11 +304,52 @@ Based on what you've shared, I'm seeing some clear patterns. Let me show you you
         <div className="max-w-3xl mx-auto">
           <div className="flex items-center justify-between text-sm text-slate-600 mb-1">
             <span>Career Assessment</span>
-            <span>Step {Math.min(currentStep + 1, totalSteps)} of {totalSteps}</span>
+            <span>
+              {isProcessing
+                ? "Processing..."
+                : `Step ${Math.min(userMessageCount + 1, totalSteps)} of ${totalSteps}`}
+            </span>
           </div>
-          <Progress value={progress} className="h-2" />
+          <Progress value={isProcessing ? 100 : progress} className="h-2" />
         </div>
       </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="bg-red-50 border-b border-red-200 px-4 py-2">
+          <div className="max-w-3xl mx-auto text-sm text-red-700">{error}</div>
+        </div>
+      )}
+
+      {/* Processing Overlay */}
+      {isProcessing && (
+        <div className="bg-blue-50 border-b border-blue-200 px-4 py-3">
+          <div className="max-w-3xl mx-auto flex items-center gap-3">
+            <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-600 border-t-transparent" />
+            <span className="text-sm text-blue-700">
+              Analyzing your career profile and calculating AI exposure...
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Manual Complete Button - shows after enough exchanges */}
+      {userMessageCount >= MIN_EXCHANGES && !isProcessing && !isTyping && (
+        <div className="bg-green-50 border-b border-green-200 px-4 py-3">
+          <div className="max-w-3xl mx-auto flex items-center justify-between">
+            <span className="text-sm text-green-700">
+              Ready to see your results? You can complete your assessment now.
+            </span>
+            <Button
+              size="sm"
+              onClick={() => processAssessment(messages)}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              Complete Assessment
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Chat Area */}
       <div className="flex-1 overflow-hidden min-h-0">
@@ -151,7 +357,10 @@ Based on what you've shared, I'm seeing some clear patterns. Let me show you you
           messages={messages}
           onSendMessage={handleSendMessage}
           isTyping={isTyping}
-          placeholder="Share your thoughts..."
+          placeholder={
+            isProcessing ? "Processing your assessment..." : "Share your thoughts..."
+          }
+          disabled={isProcessing}
         />
       </div>
     </div>

@@ -2,6 +2,7 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 
 // Define public routes (no auth required)
+// Note: API routes handle their own auth and return JSON errors
 const isPublicRoute = createRouteMatcher([
   '/',
   '/sign-in(.*)',
@@ -10,6 +11,12 @@ const isPublicRoute = createRouteMatcher([
   '/results(.*)', // Results page (shows upgrade prompt for full features)
   '/paths(.*)', // Career paths page
   '/api/chat(.*)', // Chat API for assessment
+  '/api/assessment(.*)', // Assessment processing API
+  '/api/plan(.*)', // Plan API (auth checked internally)
+  '/api/coach(.*)', // Coach API (auth checked internally)
+  '/api/checkout(.*)', // Checkout API (auth checked internally, returns JSON)
+  '/api/billing(.*)', // Billing API (auth checked internally, returns JSON)
+  '/api/webhooks(.*)', // Webhooks (signature verified internally)
 ]);
 
 // Define Shield-tier only routes
@@ -35,17 +42,17 @@ export default clerkMiddleware(async (auth, req) => {
   }
 
   // Check Shield tier for protected routes
+  // TODO: For production, configure Clerk session claims to include subscription_tier
+  // or check Supabase directly. For now, allowing all authenticated users.
   if (isShieldRoute(req)) {
-    // Get subscription tier from session claims
-    // This requires configuring session claims in Clerk dashboard
-    const subscriptionTier = sessionClaims?.subscription_tier as string | undefined;
-
-    if (subscriptionTier !== 'shield') {
-      // Redirect to paths page with upgrade prompt
-      const upgradeUrl = new URL('/paths', req.url);
-      upgradeUrl.searchParams.set('upgrade', 'required');
-      return NextResponse.redirect(upgradeUrl);
+    // For testing: allow all authenticated users to access Shield routes
+    // The page-level components will check Supabase for actual tier
+    if (!userId) {
+      const signInUrl = new URL('/sign-in', req.url);
+      signInUrl.searchParams.set('redirect_url', req.url);
+      return NextResponse.redirect(signInUrl);
     }
+    // Skip tier check for now - let authenticated users through
   }
 
   return NextResponse.next();

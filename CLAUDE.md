@@ -15,10 +15,12 @@ cd app
 npm run dev      # Start development server on localhost:3000
 npm run build    # Production build
 npm run lint     # Run ESLint
+npm run start    # Start production server
 
-# Scripts
-npx tsx scripts/import-onet.ts    # Import O*NET data to Supabase
-npx tsx scripts/score-dwas.ts     # Score DWAs for AI exposure (Phase 2)
+# Scripts (run with npx tsx)
+npx tsx scripts/import-onet.ts         # Import O*NET data to Supabase
+npx tsx scripts/score-dwas.ts          # Score DWAs for AI exposure
+npx tsx scripts/aggregate-gwa-scores.ts # Calculate GWA aggregate scores
 ```
 
 ## Architecture
@@ -27,9 +29,31 @@ npx tsx scripts/score-dwas.ts     # Score DWAs for AI exposure (Phase 2)
 - **Framework:** Next.js 16 with App Router
 - **UI:** Tailwind CSS + shadcn/ui components
 - **Database:** Supabase (PostgreSQL + pgvector for embeddings)
-- **Auth:** Clerk (required)
+- **Auth:** Clerk
 - **AI:** Claude API (Anthropic)
+- **Payments:** Stripe
+- **Email:** Resend
 - **Data:** O*NET 30.1 database
+
+### Route Structure
+
+**Pages (`app/src/app/`):**
+- `/` — Landing page
+- `/assess` — Conversational AI assessment
+- `/results` — Risk score and analysis
+- `/paths` — Career recommendations
+- `/coach` — Shield tier: AI coaching with memory
+- `/plan` — Shield tier: Action plans
+- `/learn` — Shield tier: Learning resources
+
+**API Routes (`app/src/app/api/`):**
+- `/api/chat` — Assessment chat endpoint
+- `/api/coach` — Coaching chat with memory
+- `/api/assessment` — Extract assessment data
+- `/api/plan` — Generate action plans
+- `/api/checkout` — Stripe checkout session
+- `/api/billing` — Billing portal
+- `/api/webhooks/stripe` — Stripe webhook handler
 
 ### Route Protection
 
@@ -45,8 +69,18 @@ Defined in `app/src/middleware.ts`:
 5. Shield tier unlocks action plan + coaching with memory
 
 ### Key Libraries
-- `app/src/lib/supabase.ts` — Typed Supabase client with database schema
-- `app/src/lib/claude.ts` — Claude API client with Sage personality prompts
+
+| File | Purpose |
+|------|---------|
+| `lib/supabase.ts` | Typed Supabase client with database schema |
+| `lib/claude.ts` | Claude API client with Sage personality prompts |
+| `lib/occupation-matcher.ts` | Job title → O*NET occupation matching |
+| `lib/task-mapper.ts` | Task → DWA mapping |
+| `lib/exposure-calculator.ts` | Calculate AI exposure scores |
+| `lib/career-recommender.ts` | Generate career recommendations |
+| `lib/memory-manager.ts` | Coaching conversation memory (pgvector) |
+| `lib/plan-generator.ts` | Action plan generation |
+| `lib/stripe.ts` | Stripe client configuration |
 
 ## AI Coach Personality: "Sage"
 
@@ -85,4 +119,4 @@ cp app/.env.local.example app/.env.local
 
 ## Build Plan
 
-See `docs/BUILD_PLAN.md` for the full 6-phase development roadmap with checkboxes for completed work.
+See `docs/BUILD_PLAN.md` for the 6-phase development roadmap with checkboxes for completed work.

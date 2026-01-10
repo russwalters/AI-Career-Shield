@@ -147,7 +147,7 @@ Claude powers our AI coach "Sage" and assessment conversations.
 2. Sign in or create account
 3. Go to **API Keys**
 4. Click **"Create Key"**
-5. Copy the key to your `.env.local`:
+5. Copy the key to your `.env.local`
 
 ```
 ANTHROPIC_API_KEY=sk-ant-[...]

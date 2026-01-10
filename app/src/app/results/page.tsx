@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,7 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { RiskScore } from "@/components/results/RiskScore";
 import { ScenarioToggle } from "@/components/results/ScenarioToggle";
 import { TaskBreakdown } from "@/components/results/TaskBreakdown";
-import { mockResults } from "@/data/mock-results";
+import { mockResults, AssessmentResults, TaskExposure, CareerPath } from "@/data/mock-results";
 import {
   Shield,
   ArrowRight,
@@ -19,14 +20,260 @@ import {
   AlertTriangle,
   Share2,
   Download,
+  Loader2,
 } from "lucide-react";
 
-export default function ResultsPage() {
-  const [activeScenario, setActiveScenario] = useState<
-    "current" | "slow" | "rapid"
-  >("current");
+interface CareerRecommendationAPI {
+  socCode: string;
+  title: string;
+  riskScore: number;
+  riskReduction: number;
+  skillsMatch: number;
+  growthOutlook: "High" | "Moderate" | "Low";
+  description: string;
+  skillsToLearn: string[];
+  currentSkillsApplicable: string[];
+  salaryRange: string;
+}
 
-  const results = mockResults;
+interface AssessmentAPIResponse {
+  assessmentId: string | null;
+  assessment: {
+    jobTitle: string;
+    industry: string | null;
+    companySize: string | null;
+    matchedOccupation: {
+      socCode: string;
+      title: string;
+      matchType: string;
+      confidence: number;
+    } | null;
+    tasks: Array<{ description: string; time_percent: number }>;
+    tools: string[];
+    collaborationPercent: number;
+    concerns: string | null;
+  };
+  exposure: {
+    riskScore: number;
+    confidenceRange: { low: number; high: number };
+    scenarioScores: { slow: number; rapid: number };
+    taskBreakdown: { high: number; medium: number; low: number };
+    taskScores: Array<{
+      description: string;
+      timePercent: number;
+      exposureScore: number;
+      category: "low" | "medium" | "high";
+      topDwas: Array<{ dwaId: string; title: string; score: number }>;
+    }>;
+    protectedSkills: string[];
+    vulnerableSkills: string[];
+  };
+  careerRecommendations?: CareerRecommendationAPI[];
+}
+
+/**
+ * Transform API response to the format expected by the UI components
+ */
+function transformToResults(data: AssessmentAPIResponse): AssessmentResults {
+  const { assessment, exposure } = data;
+
+  // Transform task scores to TaskExposure format
+  const tasks: TaskExposure[] = exposure.taskScores.map((task) => ({
+    name: task.description.slice(0, 50) + (task.description.length > 50 ? "..." : ""),
+    timePercent: task.timePercent,
+    exposureLevel: task.category,
+    description: task.topDwas.length > 0
+      ? `Related to: ${task.topDwas.map(d => d.title).slice(0, 2).join(", ")}`
+      : task.description,
+  }));
+
+  // Generate key insight based on the data
+  const highPercent = exposure.taskBreakdown.high;
+  const lowPercent = exposure.taskBreakdown.low;
+  let keyInsight: string;
+
+  if (exposure.riskScore >= 70) {
+    keyInsight = `Your role has significant AI exposure (${highPercent}% high-risk tasks). The good news is that ${lowPercent}% of your work involves skills that AI struggles with. Focus on expanding those protected areas while developing new capabilities.`;
+  } else if (exposure.riskScore >= 40) {
+    keyInsight = `You're in a moderate risk zone with ${highPercent}% of your time on high-exposure tasks. Your ${lowPercent > 0 ? `${lowPercent}% of protected work` : "human-centric skills"} provides a foundation to build on. Consider shifting toward more strategic, relationship-driven responsibilities.`;
+  } else {
+    keyInsight = `Your role is well-positioned with only ${highPercent}% high-exposure tasks. Your work emphasizes skills that AI can't easily replicate. Continue developing your strengths in ${exposure.protectedSkills.slice(0, 2).join(" and ") || "human-centric areas"}.`;
+  }
+
+  // Use real career recommendations if available, otherwise show defaults
+  let careerPaths: CareerPath[];
+
+  if (data.careerRecommendations && data.careerRecommendations.length > 0) {
+    careerPaths = data.careerRecommendations.map((rec, index) => ({
+      id: `path-${index + 1}`,
+      socCode: rec.socCode, // Include SOC code for plan generation
+      title: rec.title,
+      riskScore: rec.riskScore,
+      skillsMatch: rec.skillsMatch,
+      growthOutlook: rec.growthOutlook,
+      salaryRange: rec.salaryRange,
+      description: rec.description,
+      skillsToLearn: rec.skillsToLearn,
+      currentSkillsApplicable: rec.currentSkillsApplicable,
+    }));
+  } else {
+    // Fallback placeholder paths
+    careerPaths = [
+      {
+        id: "path-1",
+        title: "Strategic Leadership Role",
+        riskScore: Math.max(20, exposure.riskScore - 20),
+        skillsMatch: 70,
+        growthOutlook: "High",
+        salaryRange: "Varies by industry",
+        description: "Move into roles with more strategic oversight and less routine execution.",
+        skillsToLearn: ["Strategic planning", "Executive communication", "Team leadership"],
+        currentSkillsApplicable: exposure.protectedSkills.slice(0, 3),
+      },
+      {
+        id: "path-2",
+        title: "AI-Enhanced Specialist",
+        riskScore: Math.max(25, exposure.riskScore - 15),
+        skillsMatch: 65,
+        growthOutlook: "High",
+        salaryRange: "Varies by industry",
+        description: "Become the expert who leverages AI tools to amplify your domain expertise.",
+        skillsToLearn: ["AI tool proficiency", "Prompt engineering", "Workflow automation"],
+        currentSkillsApplicable: exposure.protectedSkills.slice(0, 3),
+      },
+      {
+        id: "path-3",
+        title: "Human-Centric Focus",
+        riskScore: Math.max(15, exposure.riskScore - 25),
+        skillsMatch: 60,
+        growthOutlook: "Moderate",
+        salaryRange: "Varies by industry",
+        description: "Pivot toward roles emphasizing relationships, creativity, and complex judgment.",
+        skillsToLearn: ["Relationship building", "Creative problem-solving", "Negotiation"],
+        currentSkillsApplicable: exposure.protectedSkills.slice(0, 3),
+      },
+    ];
+  }
+
+  return {
+    occupation: assessment.matchedOccupation?.title || assessment.jobTitle,
+    industry: assessment.industry || "Technology",
+    riskScore: exposure.riskScore,
+    confidenceRange: [exposure.confidenceRange.low, exposure.confidenceRange.high],
+    scenarioScores: exposure.scenarioScores,
+    taskBreakdown: {
+      highExposure: exposure.taskBreakdown.high,
+      mediumExposure: exposure.taskBreakdown.medium,
+      lowExposure: exposure.taskBreakdown.low,
+    },
+    tasks,
+    keyInsight,
+    protectedSkills: exposure.protectedSkills.length > 0
+      ? exposure.protectedSkills
+      : ["Relationship management", "Strategic thinking", "Complex judgment"],
+    vulnerableSkills: exposure.vulnerableSkills.length > 0
+      ? exposure.vulnerableSkills
+      : ["Routine data tasks", "Standard reporting", "Basic analysis"],
+    careerPaths,
+  };
+}
+
+function ResultsContent() {
+  const searchParams = useSearchParams();
+  const assessmentId = searchParams.get("id");
+
+  const [activeScenario, setActiveScenario] = useState<"current" | "slow" | "rapid">("current");
+  const [results, setResults] = useState<AssessmentResults | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function loadResults() {
+      try {
+        // First, try to get results from sessionStorage (set by assess page)
+        const storedResult = sessionStorage.getItem("assessmentResult");
+        if (storedResult) {
+          const parsed = JSON.parse(storedResult) as AssessmentAPIResponse;
+          setResults(transformToResults(parsed));
+          setIsLoading(false);
+          return;
+        }
+
+        // If we have an ID, fetch from API
+        if (assessmentId) {
+          const response = await fetch(`/api/assessment?id=${assessmentId}`);
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.assessment) {
+              // Transform API response format
+              const transformed: AssessmentAPIResponse = {
+                assessmentId: data.assessment.id,
+                assessment: {
+                  jobTitle: data.assessment.jobTitle,
+                  industry: data.assessment.industry,
+                  companySize: data.assessment.companySize,
+                  matchedOccupation: data.assessment.matchedOccupation,
+                  tasks: data.assessment.tasks || [],
+                  tools: data.assessment.tools || [],
+                  collaborationPercent: data.assessment.collaborationPercent || 0,
+                  concerns: data.assessment.concerns,
+                },
+                exposure: {
+                  riskScore: data.assessment.exposure.riskScore,
+                  confidenceRange: data.assessment.exposure.confidenceRange,
+                  scenarioScores: data.assessment.exposure.scenarioScores,
+                  taskBreakdown: data.assessment.exposure.taskBreakdown,
+                  taskScores: [], // Not stored in DB
+                  protectedSkills: data.assessment.exposure.protectedSkills || [],
+                  vulnerableSkills: data.assessment.exposure.vulnerableSkills || [],
+                },
+              };
+              setResults(transformToResults(transformed));
+              setIsLoading(false);
+              return;
+            }
+          }
+        }
+
+        // Fallback to mock data for demo/development
+        console.log("Using mock results data");
+        setResults(mockResults);
+        setIsLoading(false);
+      } catch (err) {
+        console.error("Error loading results:", err);
+        setError("Failed to load assessment results");
+        // Fallback to mock data
+        setResults(mockResults);
+        setIsLoading(false);
+      }
+    }
+
+    loadResults();
+  }, [assessmentId]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600 mx-auto mb-4" />
+          <p className="text-slate-600">Loading your results...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!results) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-slate-600 mb-4">No assessment results found.</p>
+          <Button asChild>
+            <Link href="/assess">Take Assessment</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -55,6 +302,13 @@ export default function ResultsPage() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+            <p className="text-sm text-yellow-700">{error} - showing sample data</p>
+          </div>
+        )}
+
         {/* Title Section */}
         <div className="mb-8">
           <Badge variant="secondary" className="mb-4">
@@ -282,11 +536,24 @@ export default function ResultsPage() {
                   </div>
 
                   {/* CTA */}
-                  <Button className="w-full group-hover:bg-blue-700" asChild>
-                    <Link href={`/paths?id=${path.id}`}>
-                      See Action Plan
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Link>
+                  <Button
+                    className="w-full group-hover:bg-blue-700"
+                    onClick={() => {
+                      // Save selected career path for plan generation
+                      sessionStorage.setItem(
+                        "selectedCareerPath",
+                        JSON.stringify({
+                          id: path.id,
+                          socCode: path.socCode,
+                          title: path.title,
+                          riskScore: path.riskScore,
+                        })
+                      );
+                      window.location.href = `/paths?id=${path.id}`;
+                    }}
+                  >
+                    See Action Plan
+                    <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
                 </CardContent>
               </Card>
@@ -340,5 +607,24 @@ export default function ResultsPage() {
         </div>
       </footer>
     </div>
+  );
+}
+
+function ResultsLoading() {
+  return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <div className="text-center">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600 mx-auto mb-4" />
+        <p className="text-slate-600">Loading your results...</p>
+      </div>
+    </div>
+  );
+}
+
+export default function ResultsPage() {
+  return (
+    <Suspense fallback={<ResultsLoading />}>
+      <ResultsContent />
+    </Suspense>
   );
 }
