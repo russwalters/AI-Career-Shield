@@ -3,6 +3,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
+  SignedIn,
+  SignedOut,
+  SignInButton,
+  UserButton,
+} from "@clerk/nextjs";
+import {
   Shield,
   Target,
   TrendingUp,
@@ -34,9 +40,20 @@ export default function Home() {
               >
                 Pricing
               </Link>
-              <Button asChild>
-                <Link href="/assess">Get Started</Link>
-              </Button>
+              <SignedOut>
+                <SignInButton mode="modal">
+                  <Button variant="ghost">Sign In</Button>
+                </SignInButton>
+                <Button asChild>
+                  <Link href="/assess">Get Started</Link>
+                </Button>
+              </SignedOut>
+              <SignedIn>
+                <Button asChild variant="outline">
+                  <Link href="/assess">Dashboard</Link>
+                </Button>
+                <UserButton afterSignOutUrl="/" />
+              </SignedIn>
             </div>
           </div>
         </div>
